@@ -252,7 +252,7 @@ void draw_detections(image im, detection *dets, int num, float thresh, char **na
                     strcat(labelstr, ", ");
                     strcat(labelstr, names[j]);
                 }
-                printf("%s: %.0f%%\n", names[j], dets[i].prob[j]*100);
+                //printf("%s: %.0f%%\n", names[j], dets[i].prob[j]*100);
             }
         }
         if(class >= 0){
@@ -289,8 +289,8 @@ void draw_detections(image im, detection *dets, int num, float thresh, char **na
             if(right > im.w-1) right = im.w-1;
             if(top < 0) top = 0;
             if(bot > im.h-1) bot = im.h-1;
-
-            draw_box_width(im, left, top, right, bot, width, red, green, blue);
+	    printf("{'category':'%s','probability':'%f','left':'%d','top':'%d','right':'%d','bottom':'%d'}\n", names[class], dets[i].prob[class], left, top, right, width);
+            /* draw_box_width(im, left, top, right, bot, width, red, green, blue);
             if (alphabet) {
                 image label = get_label(alphabet, labelstr, (im.h*.03));
                 draw_label(im, top + width, left, label, rgb);
@@ -304,7 +304,7 @@ void draw_detections(image im, detection *dets, int num, float thresh, char **na
                 free_image(mask);
                 free_image(resized_mask);
                 free_image(tmask);
-            }
+            } */
         }
     }
 }
