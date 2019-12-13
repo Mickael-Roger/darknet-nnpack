@@ -21,7 +21,8 @@ static network *net;
 static image buff [3];
 static image buff_letter[3];
 static int buff_index = 0;
-static void * cap;
+static CvCapture * cap;
+static IplImage  * ipl;
 static float fps = 0;
 static float demo_thresh = 0;
 static float demo_hier = .5;
@@ -128,7 +129,8 @@ void *detect_in_thread(void *ptr)
 //    printf("\033[1;1H");
 //    printf("\nFPS:%.1f\n",fps);
 //    printf("Objects:\n\n");
-    image display = buff[(buff_index+2) % 3];
+//    image display = buff[(buff_index+2) % 3];
+    image display;
     draw_detections(display, dets, nboxes, demo_thresh, demo_names, demo_alphabet, demo_classes);
     free_detections(dets, nboxes);
 
@@ -139,19 +141,16 @@ void *detect_in_thread(void *ptr)
 
 void *fetch_in_thread(void *ptr)
 {
-    free_image(buff[buff_index]);
-    buff[buff_index] = get_image_from_stream(cap);
-    if(buff[buff_index].data == 0) {
-        demo_done = 1;
-        return 0;
-    }
+    int status = fill_image_from_stream(cap, buff[buff_index]);
     letterbox_image_into(buff[buff_index], net->w, net->h, buff_letter[buff_index]);
+    if(status == 0) demo_done = 1;
     return 0;
 }
 
 void *display_in_thread(void *ptr)
 {
-    int c = show_image(buff[(buff_index + 1)%3], "Demo", 1);
+    /* show_image_cv(buff[(buff_index + 1)%3], "Demo", ipl);
+    /int c = cvWaitKey(1);
     if (c != -1) c = c%256;
     if (c == 27) {
         demo_done = 1;
@@ -166,7 +165,7 @@ void *display_in_thread(void *ptr)
     } else if (c == 81) {
         demo_hier -= .02;
         if(demo_hier <= .0) demo_hier = .0;
-    }
+    } */
     return 0;
 }
 
@@ -193,13 +192,22 @@ void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const ch
     demo_classes = classes;
     demo_thresh = thresh;
     demo_hier = hier;
-    printf("Demo\n");
+//    printf("Demo\n");
     net = load_network(cfgfile, weightfile, 0);
     set_batch_network(net, 1);
     pthread_t detect_thread;
     pthread_t fetch_thread;
 
     srand(2222222);
+
+#ifdef NNPACK
+    nnp_initialize();
+ #ifdef QPU_GEMM
+    net->threadpool = pthreadpool_create(1);
+ #else
+    net->threadpool = pthreadpool_create(4);
+ #endif
+#endif
 
     int i;
     demo_total = size_network(net);
@@ -211,9 +219,35 @@ void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const ch
 
     if(filename){
         printf("video file: %s\n", filename);
-        cap = open_video_stream(filename, 0, 0, 0, 0);
+        cap = cvCaptureFromFile(filename);
     }else{
-        cap = open_video_stream(0, cam_index, w, h, frames);
+        cap = cvCaptureFromCAM(cam_index);
+	//defaults
+	if (!w)
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_WIDTH, 640);
+	else
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_WIDTH, w);
+
+	if (!h)
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_HEIGHT, 360);
+	else
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_HEIGHT, h);
+
+	if (!frames)
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FPS, 7);
+	else
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FPS, frames);
+/*
+        if(w){
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_WIDTH, w);
+        }
+        if(h){
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FRAME_HEIGHT, h);
+        }
+        if(frames){
+            cvSetCaptureProperty(cap, CV_CAP_PROP_FPS, frames);
+        }
+*/
     }
 
     if(!cap) error("Couldn't connect to webcam.\n");
@@ -224,10 +258,18 @@ void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const ch
     buff_letter[0] = letterbox_image(buff[0], net->w, net->h);
     buff_letter[1] = letterbox_image(buff[0], net->w, net->h);
     buff_letter[2] = letterbox_image(buff[0], net->w, net->h);
+    ipl = cvCreateImage(cvSize(buff[0].w,buff[0].h), IPL_DEPTH_8U, buff[0].c);
 
     int count = 0;
     if(!prefix){
-        make_window("Demo", 1352, 1013, fullscreen);
+        cvNamedWindow("Demo", CV_WINDOW_NORMAL); 
+        if(fullscreen){
+            cvSetWindowProperty("Demo", CV_WND_PROP_FULLSCREEN, CV_WINDOW_FULLSCREEN);
+        } else {
+            cvMoveWindow("Demo", 0, 0);
+            cvResizeWindow("Demo", 800, 480);
+//            cvResizeWindow("Demo", 1352, 1013);
+        }
     }
 
     demo_time = what_time_is_it_now();
@@ -249,6 +291,11 @@ void demo(char *cfgfile, char *weightfile, float thresh, int cam_index, const ch
         pthread_join(detect_thread, 0);
         ++count;
     }
+#ifdef NNPACK
+    pthreadpool_destroy(net->threadpool);
+    nnp_deinitialize();
+#endif
+    free_network(net);
 }
 
 /*

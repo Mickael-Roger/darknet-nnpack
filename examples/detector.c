@@ -569,13 +569,19 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     network *net = load_network(cfgfile, weightfile, 0);
     set_batch_network(net, 1);
     srand(2222222);
-	double time;
+    double time;
+    //struct timeval start, stop;
     char buff[256];
     char *input = buff;
+    int j;
     float nms=.45;
 #ifdef NNPACK
-	nnp_initialize();
-	net->threadpool = pthreadpool_create(4);
+    nnp_initialize();
+ #ifdef QPU_GEMM
+    net->threadpool = pthreadpool_create(1);
+ #else
+    net->threadpool = pthreadpool_create(4);
+ #endif
 #endif
 
     while(1){
@@ -603,13 +609,21 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
 
 
         float *X = sized.data;
+        /*gettimeofday(&start, 0);
+		network_predict(net, X);
+		gettimeofday(&stop, 0);
+		printf("%s: Predicted in %ld ms.\n", input, (stop.tv_sec * 1000 + stop.tv_usec / 1000) - (start.tv_sec * 1000 + start.tv_usec / 1000));
+        get_region_boxes(l, im.w, im.h, net->w, net->h, thresh, probs, boxes, masks, 0, 0, hier_thresh, 1);*/
+
         time=what_time_is_it_now();
         network_predict(net, X);
         printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time);
         int nboxes = 0;
         detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
-        //printf("%d\n", nboxes);
-
+        printf("%d\n", nboxes);
+	for(int i=0;i<nboxes;i++){
+	   printf("Box %d at (x,y)=(%f,%f) with (w,h)=(%f,%f)\n", i, dets[i].bbox.x, dets[i].bbox.y, dets[i].bbox.w, dets[i].bbox.h); 
+	}
         //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
         if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
         draw_detections(im, dets, nboxes, thresh, names, alphabet, l.classes);
@@ -620,8 +634,13 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         else{
             save_image(im, "predictions");
 #ifdef OPENCV
-            make_window("predictions", 512, 512, 0);
-            show_image(im, "predictions", 0);
+            cvNamedWindow("predictions", CV_WINDOW_NORMAL); 
+            if(fullscreen){
+                cvSetWindowProperty("predictions", CV_WND_PROP_FULLSCREEN, CV_WINDOW_FULLSCREEN);
+            }
+            show_image(im, "predictions");
+            cvWaitKey(0);
+            cvDestroyAllWindows();
 #endif
         }
 
@@ -633,6 +652,7 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
 	pthreadpool_destroy(net->threadpool);
 	nnp_deinitialize();
 #endif
+	free_network(net);
 }
 
 /*
@@ -804,7 +824,7 @@ void network_detect(network *net, image im, float thresh, float hier_thresh, flo
 void run_detector(int argc, char **argv)
 {
     char *prefix = find_char_arg(argc, argv, "-prefix", 0);
-    float thresh = find_float_arg(argc, argv, "-thresh", .5);
+    float thresh = find_float_arg(argc, argv, "-thresh", .24);
     float hier_thresh = find_float_arg(argc, argv, "-hier", .5);
     int cam_index = find_int_arg(argc, argv, "-c", 0);
     int frame_skip = find_int_arg(argc, argv, "-s", 0);

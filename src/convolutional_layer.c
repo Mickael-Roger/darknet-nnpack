@@ -122,15 +122,15 @@ static size_t get_workspace_size(layer l){
 #ifdef CUDNN
 void cudnn_convolutional_setup(layer *l)
 {
-    cudnnSetTensor4dDescriptor(l->dsrcTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->c, l->h, l->w); 
-    cudnnSetTensor4dDescriptor(l->ddstTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->out_c, l->out_h, l->out_w); 
+    cudnnSetTensor4dDescriptor(l->dsrcTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->c, l->h, l->w);
+    cudnnSetTensor4dDescriptor(l->ddstTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->out_c, l->out_h, l->out_w);
 
-    cudnnSetTensor4dDescriptor(l->srcTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->c, l->h, l->w); 
-    cudnnSetTensor4dDescriptor(l->dstTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->out_c, l->out_h, l->out_w); 
-    cudnnSetTensor4dDescriptor(l->normTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, 1, l->out_c, 1, 1); 
+    cudnnSetTensor4dDescriptor(l->srcTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->c, l->h, l->w);
+    cudnnSetTensor4dDescriptor(l->dstTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, l->batch, l->out_c, l->out_h, l->out_w);
+    cudnnSetTensor4dDescriptor(l->normTensorDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, 1, l->out_c, 1, 1);
 
-    cudnnSetFilter4dDescriptor(l->dweightDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, l->n, l->c/l->groups, l->size, l->size); 
-    cudnnSetFilter4dDescriptor(l->weightDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, l->n, l->c/l->groups, l->size, l->size); 
+    cudnnSetFilter4dDescriptor(l->dweightDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, l->n, l->c/l->groups, l->size, l->size);
+    cudnnSetFilter4dDescriptor(l->weightDesc, CUDNN_DATA_FLOAT, CUDNN_TENSOR_NCHW, l->n, l->c/l->groups, l->size, l->size);
     #if CUDNN_MAJOR >= 6
     cudnnSetConvolution2dDescriptor(l->convDesc, l->pad, l->pad, l->stride, l->stride, 1, 1, CUDNN_CROSS_CORRELATION, CUDNN_DATA_FLOAT);
     #else
@@ -150,24 +150,24 @@ void cudnn_convolutional_setup(layer *l)
             l->weightDesc,
             l->convDesc,
             l->dstTensorDesc,
-            CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT,
-            2000000000,
+            CUDNN_CONVOLUTION_FWD_PREFER_FASTEST,
+            0,
             &l->fw_algo);
     cudnnGetConvolutionBackwardDataAlgorithm(cudnn_handle(),
             l->weightDesc,
             l->ddstTensorDesc,
             l->convDesc,
             l->dsrcTensorDesc,
-            CUDNN_CONVOLUTION_BWD_DATA_SPECIFY_WORKSPACE_LIMIT,
-            2000000000,
+            CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST,
+            0,
             &l->bd_algo);
     cudnnGetConvolutionBackwardFilterAlgorithm(cudnn_handle(),
             l->srcTensorDesc,
             l->ddstTensorDesc,
             l->convDesc,
             l->dweightDesc,
-            CUDNN_CONVOLUTION_BWD_FILTER_SPECIFY_WORKSPACE_LIMIT,
-            2000000000,
+            CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST,
+            0,
             &l->bf_algo);
 }
 #endif
@@ -203,7 +203,6 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
 
     // float scale = 1./sqrt(size*size*c);
     float scale = sqrt(2./(size*size*c/l.groups));
-    //printf("convscale %f\n", scale);
     //scale = .02;
     //for(i = 0; i < c*n*size*size; ++i) l.weights[i] = scale*rand_uniform(-1, 1);
     for(i = 0; i < l.nweights; ++i) l.weights[i] = scale*rand_normal();
@@ -217,11 +216,16 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
 
     l.output = calloc(l.batch*l.outputs, sizeof(float));
     l.delta  = calloc(l.batch*l.outputs, sizeof(float));
-#ifdef NNPACK
-	l.forward = forward_convolutional_layer_nnpack;
+#ifdef QPU_GEMM
+	l.forward = forward_convolutional_layer_qpu;
 #else
+ #ifdef NNPACK
+	l.forward = forward_convolutional_layer_nnpack;
+  l.nnpack_state = calloc(sizeof(nnpack_data),1);
+ #else
 	l.forward = forward_convolutional_layer;
-#endif
+ #endif //NNPACK
+#endif //QPU_GEMM
     l.backward = backward_convolutional_layer;
     l.update = update_convolutional_layer;
     if(binary){
@@ -325,7 +329,7 @@ convolutional_layer make_convolutional_layer(int batch, int h, int w, int c, int
     l.workspace_size = get_workspace_size(l);
     l.activation = activation;
 
-    fprintf(stderr, "conv  %5d %2d x%2d /%2d  %4d x%4d x%4d   ->  %4d x%4d x%4d  %5.3f BFLOPs\n", n, size, size, stride, w, h, c, l.out_w, l.out_h, l.out_c, (2.0 * l.n * l.size*l.size*l.c/l.groups * l.out_h*l.out_w)/1000000000.);
+//    fprintf(stderr, "conv  %5d %2d x%2d /%2d  %4d x%4d x%4d   ->  %4d x%4d x%0d  %5.3f BFLOPs\n", n, size, size, stride, w, h, c, l.out_w, l.out_h, l.out_c, (2.0 * l.n * l.size*l.size*l.c/l.groups * l.out_h*l.out_w)/1000000000.);
 
     return l;
 }
@@ -446,13 +450,15 @@ void backward_bias(float *bias_updates, float *delta, int batch, int n, int size
 }
 
 #ifdef NNPACK
+//#define DEBUG_NNPACK
 void forward_convolutional_layer_nnpack(convolutional_layer l, network net)
 {
 	struct nnp_size input_size = { l.w, l.h };
 	struct nnp_padding input_padding = { l.pad, l.pad, l.pad, l.pad };
 	struct nnp_size kernel_size = { l.size, l.size };
 	struct nnp_size stride = { l.stride, l.stride };
-
+	int nnp_status = 0;
+#ifndef NNPACK_FAST
 	nnp_convolution_inference(
 		nnp_convolution_algorithm_implicit_gemm,
 		nnp_convolution_transform_strategy_tuple_based,
@@ -473,7 +479,172 @@ void forward_convolutional_layer_nnpack(convolutional_layer l, network net)
 		net.threadpool,
 		NULL
 	);
-
+#else
+#ifdef DEBUG_NNPACK
+	printf("nnpack convolution: %dx%d, in=%d, out=%d, kernel=%d\n",l.w,l.h,l.c,l.n,l.size);
+#endif
+	if (l.nnpack_state->nnpack_initialized == 0)
+	{
+		nnp_status = nnp_convolution_inference(
+			nnp_convolution_algorithm_auto,
+			nnp_convolution_transform_strategy_precompute,
+			l.c,
+			l.n,
+			input_size,
+			input_padding,
+			kernel_size,
+			stride,
+			NULL,//net.input (input)
+			NULL,//l.weights (kernel)
+			NULL,//? (bias)
+			NULL,//l.output (output)
+			NULL,//workspace_buffer, need to be NULL
+			&l.nnpack_state->nnpack_computed_kernel_size,
+			nnp_activation_identity,
+			NULL,
+			net.threadpool,
+			NULL
+		);
+		if (nnp_status==nnp_status_unsupported_transform_strategy)
+		{
+#ifdef DEBUG_NNPACK
+			printf("can't use fast convolution\n");
+#endif
+			l.nnpack_state->nnpack_initialized = 2;
+		}
+		else if (nnp_status==nnp_status_success)
+		{
+      if (l.nnpack_state->nnpack_computed_kernel_size>256*1024*1024)
+      {
+#ifdef DEBUG_NNPACK
+        printf("Precomputed kernel consumes too much memory: %d bytes\n",l.nnpack_state->nnpack_computed_kernel_size);
+#endif
+  			l.nnpack_state->nnpack_initialized = 3;
+      }
+      else
+      {
+  			l.nnpack_state->nnpack_computed_kernel = aligned_alloc(64,l.nnpack_state->nnpack_computed_kernel_size);
+#ifdef DEBUG_NNPACK
+        printf("Precomputed kernel: %d bytes, aligned addr %llx\n",l.nnpack_state->nnpack_computed_kernel_size,l.nnpack_state->nnpack_computed_kernel);
+#endif
+      }
+		}
+		else
+		{
+			printf("NNPACK error! (%d)\n", nnp_status);
+		}
+	}
+  if (l.nnpack_state->nnpack_initialized==3) //low memory conv algorithm
+	{
+		nnp_status=nnp_convolution_inference(
+			nnp_convolution_algorithm_implicit_gemm,
+			nnp_convolution_transform_strategy_tuple_based,
+			l.c,
+			l.n,
+			input_size,
+			input_padding,
+			kernel_size,
+			stride,
+			net.input,
+			l.weights,
+			NULL,
+			l.output,
+			NULL,
+			NULL,
+			nnp_activation_identity,
+			NULL,
+			net.threadpool,
+			NULL
+		);
+    if (nnp_status!=nnp_status_success)
+      printf("NNPACK error! (%d)\n", nnp_status);
+	}
+	else if (l.nnpack_state->nnpack_initialized==2) //slow conv algorithm
+	{
+		nnp_status=nnp_convolution_inference(
+			nnp_convolution_algorithm_auto,
+			nnp_convolution_transform_strategy_tuple_based,
+			l.c,
+			l.n,
+			input_size,
+			input_padding,
+			kernel_size,
+			stride,
+			net.input,
+			l.weights,
+			NULL,
+			l.output,
+			NULL,
+			NULL,
+			nnp_activation_identity,
+			NULL,
+			net.threadpool,
+			NULL
+		);
+    if (nnp_status!=nnp_status_success)
+      printf("NNPACK error! (%d)\n", nnp_status);
+	}
+	else if (l.nnpack_state->nnpack_initialized==0) //NOT PRECOMPUTED YET
+	{
+#ifdef DEBUG_NNPACK
+puts("Computing initial kernel transform");
+#endif
+		nnp_status=nnp_convolution_inference(
+			nnp_convolution_algorithm_auto,
+			nnp_convolution_transform_strategy_precompute,
+			l.c,
+			l.n,
+			input_size,
+			input_padding,
+			kernel_size,
+			stride,
+			net.input,
+			l.weights,
+			NULL,
+			l.output,
+			l.nnpack_state->nnpack_computed_kernel,
+			&l.nnpack_state->nnpack_computed_kernel_size,
+			nnp_activation_identity,
+			NULL,
+			net.threadpool,
+			NULL
+		);
+    if (nnp_status!=nnp_status_success)
+      printf("NNPACK error! (%d)\n", nnp_status);
+		l.nnpack_state->nnpack_initialized=1;
+	}
+  if (l.nnpack_state->nnpack_initialized==1) //kernels have been pre-computed
+	{
+#ifdef DEBUG_NNPACK
+printf("Reusing kernel of size %d at %llx\n",l.nnpack_state->nnpack_computed_kernel_size,l.nnpack_state->nnpack_computed_kernel);
+#endif
+		nnp_status=nnp_convolution_inference(
+			nnp_convolution_algorithm_auto,
+			nnp_convolution_transform_strategy_reuse,
+			l.c,
+			l.n,
+			input_size,
+			input_padding,
+			kernel_size,
+			stride,
+			net.input,
+      l.nnpack_state->nnpack_computed_kernel,
+			NULL,
+			l.output,
+      NULL,
+      NULL,
+			nnp_activation_identity,
+			NULL,
+			net.threadpool,
+			NULL
+		);
+    if (nnp_status!=nnp_status_success)
+      printf("NNPACK error! (%d)\n", nnp_status);
+	}
+#ifdef DEBUG_NNPACK
+puts("");
+#endif
+#endif /* NNPACK_FAST */
 	int out_h = convolutional_out_height(l);
 	int out_w = convolutional_out_width(l);
 	int n = out_h*out_w;
@@ -486,6 +657,84 @@ void forward_convolutional_layer_nnpack(convolutional_layer l, network net)
 
 	activate_array_thread(l.output, l.n, n, l.activation, net.threadpool);
 	if(l.binary || l.xnor) swap_binary(&l);
+}
+#endif
+
+#ifdef QPU_GEMM
+void forward_convolutional_layer_qpu(convolutional_layer l, network net)
+{
+    struct timeval t_a, t_b, t_c, t_d, t_e;
+    int i, j;
+
+    fill_cpu(l.outputs*l.batch, 0, l.output, 1);
+
+    if(l.xnor){
+        binarize_weights(l.weights, l.n, l.c/l.groups*l.size*l.size, l.binary_weights);
+        swap_binary(&l);
+        binarize_cpu(net.input, l.c*l.h*l.w*l.batch, l.binary_input);
+        net.input = l.binary_input;
+    }
+
+    int m = l.n/l.groups;
+    int k = l.size*l.size*l.c/l.groups;
+    int n = l.out_w*l.out_h;
+    for(i = 0; i < l.batch; ++i){
+        for(j = 0; j < l.groups; ++j){
+            float *a = l.weights + j*l.nweights/l.groups;
+            //float *b = net.workspace;
+            float *c = l.output + (i*l.groups + j)*n*m;
+
+            //all of the QPU allocations are in _uncached_ memory.
+            //so it's faster to copy data to/from the QPU
+            //instead of allocating it there.
+            float *A = mkl_malloc(m*k*(32/8), 4096);//we could mempool for a tiny speedup
+            float *B = mkl_malloc(k*n*(32/8), 4096);
+            float *C = mkl_malloc(m*n*(32/8), 4096);
+printf("Allocated %d bytes onto GPU\n",m*k*(32/8)+k*n*(32/8)+m*n*(32/8));
+gettimeofday(&t_a,0);
+            im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
+                l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, B);
+gettimeofday(&t_b,0);
+            memcpy(A,a,m*k*(32/8));
+            memcpy(C,c,m*n*(32/8));
+gettimeofday(&t_c,0);
+            gemm_qpu(0,0,m,n,k,1,A,k,B,n,1,C,n);
+gettimeofday(&t_d,0);
+            memcpy(c,C,m*n*(32/8));
+gettimeofday(&t_e,0);
+printf("Copied %d bytes off of GPU\n",m*n*(32/8));
+printf("qpu_gemm im2col_cpu: %d ms\nram->qpu: %d ms\nqpu_gemm gemm: %d ms\nqpu->ram: %d ms\n",
+(t_b.tv_sec * 1000 + t_b.tv_usec / 1000) - (t_a.tv_sec * 1000 + t_a.tv_usec / 1000),
+(t_c.tv_sec * 1000 + t_c.tv_usec / 1000) - (t_b.tv_sec * 1000 + t_b.tv_usec / 1000),
+(t_d.tv_sec * 1000 + t_d.tv_usec / 1000) - (t_c.tv_sec * 1000 + t_c.tv_usec / 1000),
+(t_e.tv_sec * 1000 + t_e.tv_usec / 1000) - (t_d.tv_sec * 1000 + t_d.tv_usec / 1000));
+            mkl_free(A);
+            mkl_free(B);
+            mkl_free(C);
+        }
+    }
+
+#ifdef NNPACK
+    int out_h = convolutional_out_height(l);
+    int out_w = convolutional_out_width(l);
+    n = out_h*out_w;
+    if(l.batch_normalize){
+        forward_batchnorm_layer(l, net);
+    } else {
+       add_bias(l.output, l.biases, l.batch, l.n, out_h*out_w);
+    }
+
+    activate_array_thread(l.output, l.n, n, l.activation, net.threadpool);
+#else
+    if(l.batch_normalize){
+        forward_batchnorm_layer(l, net);
+    } else {
+        add_bias(l.output, l.biases, l.batch, l.n, l.out_h*l.out_w);
+    }
+
+    activate_array(l.output, l.outputs*l.batch, l.activation);
+#endif
+    if(l.binary || l.xnor) swap_binary(&l);
 }
 #endif
 
@@ -510,13 +759,9 @@ void forward_convolutional_layer(convolutional_layer l, network net)
             float *a = l.weights + j*l.nweights/l.groups;
             float *b = net.workspace;
             float *c = l.output + (i*l.groups + j)*n*m;
-            float *im =  net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w;
 
-            if (l.size == 1) {
-                b = im;
-            } else {
-                im2col_cpu(im, l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
-            }
+            im2col_cpu(net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w,
+                l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, b);
             gemm(0,0,m,n,k,1,a,k,b,n,1,c,n);
         }
     }
@@ -552,31 +797,21 @@ void backward_convolutional_layer(convolutional_layer l, network net)
             float *b = net.workspace;
             float *c = l.weight_updates + j*l.nweights/l.groups;
 
-            float *im  = net.input + (i*l.groups + j)*l.c/l.groups*l.h*l.w;
-            float *imd = net.delta + (i*l.groups + j)*l.c/l.groups*l.h*l.w;
+            float *im = net.input+(i*l.groups + j)*l.c/l.groups*l.h*l.w;
 
-            if(l.size == 1){
-                b = im;
-            } else {
-                im2col_cpu(im, l.c/l.groups, l.h, l.w, 
-                        l.size, l.stride, l.pad, b);
-            }
-
+            im2col_cpu(im, l.c/l.groups, l.h, l.w,
+                    l.size, l.stride, l.pad, b);
             gemm(0,1,m,n,k,1,a,k,b,k,1,c,n);
 
-            if (net.delta) {
+            if(net.delta){
                 a = l.weights + j*l.nweights/l.groups;
                 b = l.delta + (i*l.groups + j)*m*k;
                 c = net.workspace;
-                if (l.size == 1) {
-                    c = imd;
-                }
 
                 gemm(1,0,n,k,m,1,a,n,b,k,0,c,k);
 
-                if (l.size != 1) {
-                    col2im_cpu(net.workspace, l.c/l.groups, l.h, l.w, l.size, l.stride, l.pad, imd);
-                }
+                col2im_cpu(net.workspace, l.c/l.groups, l.h, l.w, l.size, l.stride,
+                    l.pad, net.delta + (i*l.groups + j)*l.c/l.groups*l.h*l.w);
             }
         }
     }
@@ -666,4 +901,3 @@ image *visualize_convolutional_layer(convolutional_layer l, char *window, image 
     free_image(dc);
     return single_weights;
 }
-
