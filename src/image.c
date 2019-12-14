@@ -303,6 +303,7 @@ void draw_detections(image im, detection *dets, int num, float thresh, char **na
 
             //draw_box_width(im, left, top, right, bot, width, red, green, blue);
             printf("{'category':'%s','probability':'%f','left':'%f','top':'%f','right':'%f','bottom':'%f'}\n", names[class], dets[i].prob[class], left, top, right, bot);
+            fflush(stdout);
             /* if (alphabet) {
                 image label = get_label(alphabet, labelstr, (im.h*.03));
                 draw_label(im, top + width, left, label, rgb);
