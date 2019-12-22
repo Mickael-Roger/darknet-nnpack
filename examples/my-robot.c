@@ -1,11 +1,17 @@
 #include "darknet.h"
 
-// Mick #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
 
-void myrobot_detection(char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh)
+typedef struct
 {
+    char **names;
+    network *net;
+} data_init;
+
+data_init myrobot_init_detection(char *datacfg, char *cfgfile, char *weightfile)
+{
+    data_init init;
     list *options = read_data_cfg(datacfg);
     char *name_list = option_find_str(options, "names", "data/names.list"); // Mick : This file does not exist ?
     char **names = get_labels(name_list);
@@ -15,12 +21,7 @@ void myrobot_detection(char *datacfg, char *cfgfile, char *weightfile, char *fil
     set_batch_network(net, 1);
     srand(2222222);
     
-    // double time; // Mick : Do I really need that ?
 
-    char buff[256];
-    char *input = buff;
-    int j;
-    float nms=.45;
 #ifdef NNPACK
     nnp_initialize();
  #ifdef QPU_GEMM
@@ -29,6 +30,27 @@ void myrobot_detection(char *datacfg, char *cfgfile, char *weightfile, char *fil
     net->threadpool = pthreadpool_create(4);
  #endif
 #endif
+
+    init.names = names;
+    init.net = net;
+
+    return init;
+
+}
+
+void myrobot_detection(data_init init, char *filename, float thresh, float hier_thresh)
+{
+
+    char **names;
+    network *net;
+
+    char buff[256];
+    char *input = buff;
+    int j;
+    float nms=.45;
+
+    net = init.net;
+    names = init.names;
 
     strncpy(input, filename, 256);  // Mick : Avoid it by passing the data
 
@@ -44,16 +66,12 @@ void myrobot_detection(char *datacfg, char *cfgfile, char *weightfile, char *fil
 
     float *X = sized.data;
 
-    // Mick time=what_time_is_it_now(); // Mick : Do I need that ?
-
     network_predict(net, X);
-    // printf("%s: Predicted in %f seconds.\n", input, what_time_is_it_now()-time); // Mick : To remove
 
     int nboxes = 0; // Mick : Number of detections
     detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
 
     for(int i=0;i<nboxes;i++){
-        // Mick : printf("Box %d at (x,y)=(%f,%f) with (w,h)=(%f,%f)\n", i, dets[i].bbox.x, dets[i].bbox.y, dets[i].bbox.w, dets[i].bbox.h);
 
         char labelstr[4096] = {0};
         char str2float[8] = {0};
@@ -93,16 +111,18 @@ void myrobot_detection(char *datacfg, char *cfgfile, char *weightfile, char *fil
 
     }
 
-    //if (nms) do_nms_obj(boxes, probs, l.w*l.h*l.n, l.classes, nms);
-    //Mick if (nms) do_nms_sort(dets, nboxes, l.classes, nms);
-    //Mick draw_detections(im, dets, nboxes, thresh, names, alphabet, l.classes);
-    
     free_detections(dets, nboxes);
-    // Mick save_image(im, "predictions");
 
     free_image(im);
     free_image(sized);
 
+}
+
+void myrobot_clean_detection(data_init init)
+{
+    network *net;
+
+    net = init.net;
 
 #ifdef NNPACK
 	pthreadpool_destroy(net->threadpool);
@@ -113,7 +133,11 @@ void myrobot_detection(char *datacfg, char *cfgfile, char *weightfile, char *fil
 
 
 int main(){
-    //TODO Split in 2 : Init then detect
-    
-    myrobot_detection("cfg/coco.data", "cfg/yolov3-tiny.cfg", "yolov3-tiny.weights", "./mypic.jpg", 0.5, 0.5);
+
+    data_init res_init;
+
+    res_init = myrobot_init_detection("cfg/coco.data", "cfg/yolov3-tiny.cfg", "yolov3-tiny.weights");
+    myrobot_detection(res_init, "./mypic.jpg", 0.5, 0.5);
+    myrobot_clean_detection(res_init);
+
 }
