@@ -1,6 +1,6 @@
 GPU=0
 CUDNN=0
-OPENCV=1
+OPENCV=0
 NNPACK=1
 NNPACK_FAST=1
 ARM_NEON=1
@@ -97,12 +97,14 @@ LDFLAGS+= -lstdc++
 OBJ+=convolutional_kernels.o deconvolutional_kernels.o activation_kernels.o im2col_kernels.o col2im_kernels.o blas_kernels.o crop_layer_kernels.o dropout_layer_kernels.o maxpool_layer_kernels.o avgpool_layer_kernels.o
 endif
 
+MYOBJ=my-robot.o gemm.o utils.o cuda.o list.o image.o activations.o im2col.o col2im.o blas.o crop_layer.o dropout_layer.o maxpool_layer.o softmax_layer.o data.o matrix.o network.o connected_layer.o cost_layer.o parser.o option_list.o detection_layer.o route_layer.o upsample_layer.o box.o normalization_layer.o avgpool_layer.o layer.o local_layer.o shortcut_layer.o logistic_layer.o activation_layer.o rnn_layer.o gru_layer.o crnn_layer.o demo.o batchnorm_layer.o region_layer.o reorg_layer.o tree.o  lstm_layer.o l2norm_layer.o yolo_layer.o
 OBJ+=my-robot.o
 
 EXECOBJ = $(addprefix $(OBJDIR), $(EXECOBJA))
 OBJS = $(addprefix $(OBJDIR), $(OBJ))
+MYOBJS = $(addprefix $(OBJDIR), $(MYOBJ))
 DEPS = $(wildcard src/*.h) Makefile include/darknet.h
-MYOBJ=$(addprefix $(OBJDIR), $(MYEXECOBJA))
+MYEXECOBJ=$(addprefix $(OBJDIR), $(MYEXECOBJA))
 
 #all: obj backup results $(SLIB) $(ALIB) $(EXEC)
 all: obj  results $(SLIB) $(ALIB) $(EXEC) $(MYEXEC) $(MYSLIB)
@@ -111,7 +113,7 @@ all: obj  results $(SLIB) $(ALIB) $(EXEC) $(MYEXEC) $(MYSLIB)
 $(EXEC): $(EXECOBJ) $(ALIB)
 	$(CC) $(COMMON) $(CFLAGS) $^ -o $@ $(LDFLAGS) $(ALIB)
 
-$(MYEXEC): $(MYOBJ) $(ALIB)
+$(MYEXEC): $(MYEXECOBJ) $(ALIB)
 	$(CC) $(COMMON) $(CFLAGS) $^ -o $@ $(LDFLAGS) $(ALIB)
 
 $(ALIB): $(OBJS)
@@ -121,7 +123,7 @@ $(SLIB): $(OBJS)
 	$(CC) $(CFLAGS) -shared $^ -o $@
 
 $(MYSLIB): $(OBJS)
-	$(CC) $(CFLAGS) -shared $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@
 
 $(OBJDIR)%.o: %.c $(DEPS)
 	$(CC) $(COMMON) $(CFLAGS) -c $< -o $@

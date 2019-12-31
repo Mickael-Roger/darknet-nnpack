@@ -3,6 +3,21 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#include <sys/ipc.h> 
+#include <sys/msg.h> 
+
+#define MSG_BUFFER_MAX  1024
+
+typedef struct  { 
+    long data_type;
+    char response[MSG_BUFFER_MAX]; 
+} mesg_send_buffer;
+
+typedef struct  {  
+    long data_type;  
+    char message[MSG_BUFFER_MAX]; 
+} mesg_reicv_buffer;
+
 typedef struct
 {
     char **names;
@@ -38,7 +53,7 @@ data_init myrobot_init_detection(char *datacfg, char *cfgfile, char *weightfile)
 
 }
 
-void myrobot_detection(data_init init, char *filename, float thresh, float hier_thresh)
+void myrobot_detection(data_init init, char *filename, float thresh, float hier_thresh, char *response)
 {
 
     char **names;
@@ -48,6 +63,11 @@ void myrobot_detection(data_init init, char *filename, float thresh, float hier_
     char *input = buff;
     int j;
     float nms=.45;
+    char responsetmp[256];
+
+    int size=0;
+
+    
 
     net = init.net;
     names = init.names;
@@ -70,6 +90,8 @@ void myrobot_detection(data_init init, char *filename, float thresh, float hier_
 
     int nboxes = 0; // Mick : Number of detections
     detection *dets = get_network_boxes(net, im.w, im.h, thresh, hier_thresh, 0, 1, &nboxes);
+
+    sprintf(response, "");
 
     for(int i=0;i<nboxes;i++){
 
@@ -104,9 +126,13 @@ void myrobot_detection(data_init init, char *filename, float thresh, float hier_
             if(left < 0) left = 0;
             if(top < 0) top = 0;
 
-            printf("\{\"category\":\"%s\",\"probability\":\"%f\",\"left\":\"%f\",\"top\":\"%f\",\"right\":\"%f\",\"bottom\":\"%f\"}\n", names[class], dets[i].prob[class], left, top, right, bot);
-            fflush(stdout);
-        
+            sprintf(responsetmp, "\{\"category\":\"%s\",\"probability\":\"%f\",\"left\":\"%f\",\"top\":\"%f\",\"right\":\"%f\",\"bottom\":\"%f\"}", names[class], dets[i].prob[class], left, top, right, bot);
+
+            if(( strlen(responsetmp) + size) <  MSG_BUFFER_MAX){
+                size = size + strlen(responsetmp);
+                sprintf(response,"%s%s", response, responsetmp);
+            }
+
         }
 
     }
@@ -134,10 +160,70 @@ void myrobot_clean_detection(data_init init)
 
 int main(){
 
+    int msgid, reicvid;
+    mesg_send_buffer message_send;
+    mesg_reicv_buffer message_reicv;
+
+    char response[MSG_BUFFER_MAX];
+
+    char *filename;
+    char id_txt[6];
+    int id, i;
+
+
+    if (( msgid = msgget( (key_t)1357, 0666 | IPC_CREAT)) == -1 ){
+ 		perror( "msgget() failed");
+		exit( 1);       
+    } 
+
+    if (( reicvid = msgget( (key_t)2468, 0666 | IPC_CREAT)) == -1 ){
+		perror( "msgget() failed");
+		exit( 1);
+	}
+
+    
+
     data_init res_init;
 
     res_init = myrobot_init_detection("cfg/coco.data", "cfg/yolov3-tiny.cfg", "yolov3-tiny.weights");
-    myrobot_detection(res_init, "./mypic.jpg", 0.5, 0.5);
+    
+    while(1){
+
+		if (msgrcv( reicvid, &message_reicv, sizeof( mesg_reicv_buffer) - sizeof(long), 0, 0) == -1){
+			perror( "msgrcv() failed");
+		}
+
+        i=0;
+        while(message_reicv.message[i] != ';'){
+            printf("I: %d %c\n", i, message_reicv.message[i]);fflush(stdout);
+            i++;
+            if(i > 5){
+                i=-1;
+                break;
+            }
+        }
+
+        
+
+        if( i > 0){
+
+            strncpy( id_txt, message_send.response, i );
+            filename = message_reicv.message + i + 1;
+            id = atoi(id_txt);
+
+            myrobot_detection(res_init, filename, 0.5, 0.5, message_send.response);
+            message_send.data_type = 1;
+
+
+            if (msgsnd( msgid, &message_send, sizeof(mesg_send_buffer) - sizeof(long), 0) == -1)
+            {
+                perror( "msgsnd() failed");
+                exit( 1);
+            }
+            
+        }
+    }
+    
     myrobot_clean_detection(res_init);
 
 }
